@@ -26,8 +26,8 @@ DB_CONFIG = {
 }
 
 # Definir esquema permitido
-TABLA_PERMITIDA = "order_history"  # Cambio de 'mercado' a 'order_history'
-COLUMNAS_PERMITIDAS = ["content"]  # Asegúrate de que 'content' es una columna válida en 'order_history'
+TABLA_PERMITIDA = "order_history"  # Nombre correcto de la tabla
+COLUMNAS_PERMITIDAS = ["content", "username"]  # Incluyendo ambas columnas
 
 # Conectar a la base de datos PostgreSQL
 def conectar_bd():
@@ -66,20 +66,24 @@ Clasificación:
 # Generar una consulta SQL usando Gemini
 def generar_consulta_sql(pregunta, tipo_pregunta):
     # Crear el prompt detallado, asegurando que Gemini genere solo la consulta SQL sin comentarios
+    columnas = ', '.join([f"`{col}`" for col in COLUMNAS_PERMITIDAS])  # Usar backticks para evitar problemas con nombres
     prompt = f"""
 Eres un asistente que traduce preguntas en lenguaje natural a consultas SQL para una base de datos de comercio electrónico.
-La base de datos tiene una única tabla llamada 'order_history' con una columna llamada 'content'.
-Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'order_history' y la columna 'content'.
+La base de datos tiene una única tabla llamada '{TABLA_PERMITIDA}' con las columnas {', '.join([f"'{col}'" for col in COLUMNAS_PERMITIDAS])}.
+Solo debes generar consultas SELECT válidas y seguras sobre la tabla '{TABLA_PERMITIDA}' y las columnas {', '.join([f"'{col}'" for col in COLUMNAS_PERMITIDAS])}.
 No incluyas consultas que modifiquen la base de datos (como INSERT, UPDATE, DELETE).
 
 Además, si la pregunta es de tipo "{tipo_pregunta}", adapta la consulta en consecuencia.
 
-Por favor, genera únicamente la consulta SQL sin comentarios ni explicaciones adicionales.
+Por favor, genera únicamente la consulta SQL sin comentarios ni explicaciones adicionales. Usa comillas dobles para los nombres de las columnas y tabla si es necesario.
+
+Ejemplo:
+Pregunta del usuario: "¿Cuántos pedidos se realizaron cada usuario?"
+Consulta SQL: SELECT content, username FROM order_history WHERE ...;
 
 Pregunta del usuario: "{pregunta}"
 Consulta SQL:
 """
-    
     try:
         # Definir el modelo a utilizar
         model_name = "models/gemini-1.5-flash"  # Asegúrate de que este modelo esté disponible
@@ -115,19 +119,19 @@ def validar_consulta_sql(consulta_sql):
         return False
 
     # Verificar que solo se use la tabla permitida
-    tablas = re.findall(r'FROM\s+(\w+)', consulta_sql_clean, re.IGNORECASE)
+    tablas = re.findall(r'FROM\s+`?(\w+[-_]?\w*)`?', consulta_sql_clean, re.IGNORECASE)
     for tabla in tablas:
-        if tabla.lower() != TABLA_PERMITIDA:
+        if tabla.lower() != TABLA_PERMITIDA.lower():
             print(f"Tabla no permitida en la consulta: {tabla}")
             return False
 
     # Verificar que solo se usen las columnas permitidas
-    select_clause = re.findall(r'SELECT\s+(.*?)\s+FROM', consulta_sql_clean, re.IGNORECASE)
+    select_clause = re.findall(r'SELECT\s+(.*?)\s+FROM', consulta_sql_clean, re.IGNORECASE | re.DOTALL)
     if select_clause:
         select_clause = select_clause[0]
         # Extraer todas las columnas permitidas presentes en el SELECT
-        columnas_en_query = re.findall(r'\b(' + '|'.join(COLUMNAS_PERMITIDAS) + r')\b', select_clause)
-
+        columnas_en_query = re.findall(r'`?(\w+)`?', select_clause)
+        
         # Extraer todas las columnas usadas en el SELECT (incluyendo las dentro de funciones)
         all_column_refs = re.findall(r'\b\w+\b', select_clause)
         # Excluir palabras clave de SQL y funciones
@@ -141,6 +145,17 @@ def validar_consulta_sql(consulta_sql):
             if columna not in COLUMNAS_PERMITIDAS:
                 print(f"Columna no permitida en la consulta: {columna}")
                 return False
+
+        # **Nueva Verificación: Asegurar que ambas columnas estén presentes**
+        columnas_seleccionadas = set(columnas_en_query)
+        columnas_requeridas = set(COLUMNAS_PERMITIDAS)
+        if not columnas_requeridas.issubset(columnas_seleccionadas):
+            print(f"La consulta debe incluir las columnas: {', '.join(COLUMNAS_PERMITIDAS)}")
+            return False
+
+    else:
+        print("No se pudo identificar la cláusula SELECT.")
+        return False
 
     return True
 
@@ -167,8 +182,12 @@ def realizar_analisis(pregunta, datos):
     if not datos:
         return "No se encontró información suficiente para realizar el análisis solicitado."
 
-    # Concatenar los datos obtenidos en una sola cadena de texto
-    contenidos = "\n".join([fila[0] for fila in datos])
+    # Concatenar los datos obtenidos en una sola cadena de texto, incluyendo 'username'
+    try:
+        contenidos = "\n".join([f"Username: {fila[1]}, Content: {fila[0]}" for fila in datos])
+    except IndexError as e:
+        print(f"Error al procesar los datos para análisis: {e}")
+        return "Error al procesar los datos para el análisis solicitado."
 
     # Crear el prompt para Gemini
     prompt = f"""
@@ -224,7 +243,7 @@ def formatear_respuesta(filas, columnas, tipo_pregunta, pregunta_original):
 def obtener_todos_los_contenidos(conn):
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT content FROM order_history;")  # Cambio de 'mercado' a 'order_history'
+        cursor.execute(f"SELECT {', '.join(COLUMNAS_PERMITIDAS)} FROM {TABLA_PERMITIDA};")  # Seleccionar ambas columnas
         resultados = cursor.fetchall()
         cursor.close()
         return resultados
@@ -251,6 +270,8 @@ def consulta(input_usuario):
         respuesta = realizar_analisis(input_usuario, obtener_todos_los_contenidos(conn))
         conn.close()
         return respuesta
+
+    print(f"Consulta SQL a ejecutar: {consulta_sql}")  # Debugging
 
     # Ejecutar la consulta SQL
     filas, columnas = ejecutar_consulta_sql(consulta_sql, conn)

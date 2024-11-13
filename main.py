@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware 
 from pydantic import BaseModel
 from backend_mercado import consulta as consulta_mercado
 from backend_financiamiento import consulta as consulta_financiamiento
@@ -7,6 +8,15 @@ from backend_historial import consulta as consulta_historial
 
 # Crear instancia de FastAPI
 app = FastAPI(title="API de Bots", version="1.1")
+
+# Configuración de CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # Permitir todos los orígenes
+    allow_credentials=True,
+    allow_methods=["*"],        # Permitir todos los métodos (GET, POST, etc.)
+    allow_headers=["*"],        # Permitir todos los encabezados
+)
 
 # Modelo de datos para la solicitud
 class Consulta(BaseModel):

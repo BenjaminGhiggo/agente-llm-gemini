@@ -7,8 +7,7 @@ import re  # Importar el módulo de expresiones regulares
 
 # Establecer el título de la aplicación
 st.title("Sistema 2")
-# Añadir una descripción debajo del título
-st.write("¡Puedes hacerme todas las preguntas sobre mercado y dejar trabajar al equipo de Data Science!")
+
 
 # Inicializar el estado de la sesión para almacenar preguntas y respuestas si no existen
 if 'preguntas' not in st.session_state:
