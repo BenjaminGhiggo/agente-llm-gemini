@@ -1,7 +1,7 @@
 # backend.py
 
 import os
-import sqlite3
+import psycopg2
 import re
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -16,16 +16,25 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# Definir esquema permitido
-TABLA_PERMITIDA = "ventas"
-COLUMNAS_PERMITIDAS = ["producto"]
+# Configuración de la base de datos PostgreSQL
+DB_CONFIG = {
+    "host": os.getenv("HOST"),
+    "database": os.getenv("DATABASE"),
+    "user": os.getenv("USER"),
+    "password": os.getenv("PASSWORD"),
+    "port": os.getenv("PORT", "5432")  # Puerto por defecto para PostgreSQL
+}
 
-# Conectar a la base de datos SQLite
-def conectar_bd(db_path="ecommerce.db"):
+# Definir esquema permitido
+TABLA_PERMITIDA = "mercado"
+COLUMNAS_PERMITIDAS = ["content"]
+
+# Conectar a la base de datos PostgreSQL
+def conectar_bd():
     try:
-        conn = sqlite3.connect(db_path)
+        conn = psycopg2.connect(**DB_CONFIG)
         return conn
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         print(f"Error al conectar a la base de datos: {e}")
         return None
 
@@ -34,10 +43,10 @@ def generar_consulta_sql(pregunta):
     # Crear el prompt detallado
     prompt = f"""
     Eres un asistente que traduce preguntas en lenguaje natural a consultas SQL para una base de datos de comercio electrónico.
-    La base de datos tiene una única tabla llamada 'ventas' con una columna llamada 'producto'.
-    Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'ventas' y la columna 'producto'.
+    La base de datos tiene una única tabla llamada 'mercado' con una columna llamada 'content'.
+    Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'mercado' y la columna 'content'.
     No incluyas consultas que modifiquen la base de datos (como INSERT, UPDATE, DELETE).
-    
+
     Pregunta del usuario: "{pregunta}"
     Consulta SQL:
     """
@@ -113,9 +122,10 @@ def ejecutar_consulta_sql(consulta_sql, conn):
         cursor = conn.cursor()
         cursor.execute(consulta_sql)
         filas = cursor.fetchall()
-        columnas = [description[0] for description in cursor.description]
+        columnas = [desc[0] for desc in cursor.description]
+        cursor.close()
         return filas, columnas
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         print(f"Error al ejecutar la consulta SQL: {e}")
         return None, None
 

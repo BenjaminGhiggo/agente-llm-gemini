@@ -3,11 +3,12 @@
 import backend  # Importar el módulo backend que contiene la lógica de procesamiento de consultas
 import streamlit as st  # Importar la biblioteca Streamlit para crear la interfaz de usuario
 from streamlit_chat import message  # Importar la función message para mostrar mensajes de chat en Streamlit
+import re  # Importar el módulo de expresiones regulares
 
 # Establecer el título de la aplicación
-st.title("App No Moleste Usuario de Negocio")
+st.title("Sistema 2")
 # Añadir una descripción debajo del título
-st.write("¡Puedes hacerme todas las preguntas sobre ventas y dejar trabajar al equipo de Data Science!")
+st.write("¡Puedes hacerme todas las preguntas sobre mercado y dejar trabajar al equipo de Data Science!")
 
 # Inicializar el estado de la sesión para almacenar preguntas y respuestas si no existen
 if 'preguntas' not in st.session_state:
@@ -32,7 +33,9 @@ def click():
         message(pregunta, is_user=True, key=f"pregunta_{len(st.session_state.preguntas)-1}")
         
         # Mostrar la respuesta en el chat
-        if respuesta.startswith("| "):  # Check for markdown table
+        if respuesta.isdigit():  # Si la respuesta es solo un número
+            st.write(respuesta)
+        elif re.match(r'^\|.*\|$', respuesta, re.DOTALL):  # Si es una tabla Markdown
             st.markdown(respuesta, unsafe_allow_html=True)
         else:
             message(respuesta, is_user=False, key=f"respuesta_{len(st.session_state.respuestas)-1}")
