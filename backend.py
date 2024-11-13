@@ -2,88 +2,157 @@
 
 import os
 import sqlite3
+import re
 from dotenv import load_dotenv
 import google.generativeai as genai
 
 # Cargar las variables de entorno desde un archivo .env
 load_dotenv()
 
-# Configurar la clave de API de Gemini
+# Configurar la clave API de Gemini desde la variable de entorno
 api_key = os.getenv("GENAI_API_KEY")
-
 if not api_key:
-    raise ValueError("La clave API no se encontró. Asegúrate de configurar 'GENAI_API_KEY' en tu archivo .env")
+    raise ValueError("La clave API de Gemini no se encontró. Asegúrate de configurar 'GENAI_API_KEY' en tu archivo .env")
 
-# Configurar la API de Gemini
 genai.configure(api_key=api_key)
 
+# Definir esquema permitido
+TABLA_PERMITIDA = "ventas"
+COLUMNAS_PERMITIDAS = ["producto"]
+
 # Conectar a la base de datos SQLite
-conexion = sqlite3.connect('ecommerce.db')
-cursor = conexion.cursor()
+def conectar_bd(db_path="ecommerce.db"):
+    try:
+        conn = sqlite3.connect(db_path)
+        return conn
+    except sqlite3.Error as e:
+        print(f"Error al conectar a la base de datos: {e}")
+        return None
 
-# Función para generar la consulta SQL usando Gemini
-def generar_consulta_sql(pregunta_usuario):
+# Generar una consulta SQL usando Gemini
+def generar_consulta_sql(pregunta):
+    # Crear el prompt detallado
     prompt = f"""
-    Eres un asistente que ayuda a generar consultas SQL para una base de datos SQLite llamada 'ecommerce.db'.
-    Genera una consulta SQL válida para responder la siguiente pregunta:
-
-    Pregunta: "{pregunta_usuario}"
-
-    Reglas:
-    - Utiliza sintaxis compatible con SQLite.
-    - No incluyas comentarios ni explicaciones.
-    - Solo devuelve la consulta SQL.
-
+    Eres un asistente que traduce preguntas en lenguaje natural a consultas SQL para una base de datos de comercio electrónico.
+    La base de datos tiene una única tabla llamada 'ventas' con una columna llamada 'producto'.
+    Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'ventas' y la columna 'producto'.
+    No incluyas consultas que modifiquen la base de datos (como INSERT, UPDATE, DELETE).
+    
+    Pregunta del usuario: "{pregunta}"
     Consulta SQL:
     """
+
     try:
-        response = genai.generate_text(
-            model='models/text-bison-001',  # Puedes ajustar el modelo si es necesario
-            prompt=prompt,
-            max_output_tokens=150,
-            temperature=0.2,
-            top_p=0.9
-        )
-        sql_query = response.generations[0].text.strip()
-        return sql_query
+        # Definir el modelo a utilizar
+        model_name = "models/gemini-1.5-flash"  # Asegúrate de que este modelo esté disponible
+
+        # Crear instancia del modelo
+        model = genai.GenerativeModel(model_name)
+
+        # Generar contenido a partir del prompt
+        response = model.generate_content(prompt)
+
+        # Obtener el texto de la respuesta
+        consulta_sql = response.text.strip()
+
+        # Eliminar bloques de código Markdown si existen
+        consulta_sql = re.sub(r'^```sql\s*', '', consulta_sql, flags=re.IGNORECASE)
+        consulta_sql = re.sub(r'```\s*$', '', consulta_sql, flags=re.IGNORECASE)
+
+        print(f"Consulta SQL generada: {consulta_sql}")
+        return consulta_sql
     except Exception as e:
-        print("Error al generar la consulta SQL:", str(e))
+        print("Error al generar la consulta SQL con Gemini:", str(e))
         return None
 
-# Función para ejecutar la consulta SQL y obtener los resultados
-def ejecutar_consulta(sql_query):
+# Validar la consulta SQL generada
+def validar_consulta_sql(consulta_sql):
+    # Verificar que la consulta comience con SELECT
+    if not re.match(r'^\s*SELECT\s', consulta_sql, re.IGNORECASE):
+        print("La consulta no es un SELECT.")
+        return False
+
+    # Verificar que solo se use la tabla permitida
+    tablas = re.findall(r'FROM\s+(\w+)', consulta_sql, re.IGNORECASE)
+    for tabla in tablas:
+        if tabla.lower() != TABLA_PERMITIDA:
+            print(f"Tabla no permitida en la consulta: {tabla}")
+            return False
+
+    # Verificar que solo se usen las columnas permitidas
+    select_clause = re.findall(r'SELECT\s+(.*?)\s+FROM', consulta_sql, re.IGNORECASE)
+    if select_clause:
+        select_clause = select_clause[0]
+        # Extraer todas las columnas permitidas presentes en el SELECT
+        columnas_en_query = re.findall(r'\b(' + '|'.join(COLUMNAS_PERMITIDAS) + r')\b', select_clause)
+
+        # Extraer todas las columnas usadas en el SELECT (incluyendo las dentro de funciones)
+        all_column_refs = re.findall(r'\b\w+\b', select_clause)
+        # Excluir palabras clave de SQL y funciones
+        sql_keywords = set([
+            'COUNT', 'DISTINCT', 'AS', 'SUM', 'AVG', 'MIN', 'MAX', 'GROUP', 'BY', 'ORDER', 'WHERE', 'AND', 'OR'
+        ])
+        columns_used = [word for word in all_column_refs if word.upper() not in sql_keywords]
+
+        # Verificar que todas las columnas usadas estén permitidas
+        for columna in columns_used:
+            if columna not in COLUMNAS_PERMITIDAS:
+                print(f"Columna no permitida en la consulta: {columna}")
+                return False
+
+    return True
+
+# Ejecutar la consulta SQL en la base de datos
+def ejecutar_consulta_sql(consulta_sql, conn):
+    # Validar la consulta SQL antes de ejecutarla
+    if not validar_consulta_sql(consulta_sql):
+        print("Consulta SQL no válida.")
+        return None, None
+
     try:
-        cursor.execute(sql_query)
-        resultados = cursor.fetchall()
-        # Obtener los nombres de las columnas
-        columnas = [descripcion[0] for descripcion in cursor.description]
-        # Formatear los resultados en una lista de diccionarios
-        resultados_formateados = [dict(zip(columnas, fila)) for fila in resultados]
-        return resultados_formateados
-    except Exception as e:
-        print("Error al ejecutar la consulta SQL:", str(e))
-        return None
+        cursor = conn.cursor()
+        cursor.execute(consulta_sql)
+        filas = cursor.fetchall()
+        columnas = [description[0] for description in cursor.description]
+        return filas, columnas
+    except sqlite3.Error as e:
+        print(f"Error al ejecutar la consulta SQL: {e}")
+        return None, None
 
-# Función principal para procesar la pregunta del usuario
-def consulta(pregunta_usuario):
-    sql_query = generar_consulta_sql(pregunta_usuario)
-    if sql_query:
-        print("Consulta SQL generada:")
-        print(sql_query)
-        resultados = ejecutar_consulta(sql_query)
-        if resultados is not None:
-            if resultados:
-                return resultados
-            else:
-                return "La consulta no devolvió resultados."
-        else:
-            return "Error al ejecutar la consulta SQL."
-    else:
-        return "No se pudo generar una consulta SQL."
+# Formatear los resultados para la respuesta al usuario
+def formatear_respuesta(filas, columnas):
+    if not filas:
+        return "No se encontraron resultados para tu consulta."
 
-if __name__ == "__main__":
-    # Ejemplo de uso
-    pregunta_de_prueba = "¿Cuáles son los productos más vendidos en el último mes?"
-    respuesta = consulta(pregunta_de_prueba)
-    print("Respuesta:")
-    print(respuesta)
+    # Si es una sola fila y una sola columna, devolver solo el valor
+    if len(filas) == 1 and len(columnas) == 1:
+        return str(filas[0][0])
+
+    # Crear una tabla simple en formato markdown para múltiples resultados
+    tabla = "| " + " | ".join(columnas) + " |\n"
+    tabla += "| " + " | ".join(["---"] * len(columnas)) + " |\n"
+    for fila in filas:
+        fila_formateada = "| " + " | ".join([str(item) for item in fila]) + " |\n"
+        tabla += fila_formateada
+
+    return tabla
+
+# Función principal para manejar la consulta del usuario
+def consulta(input_usuario):
+    conn = conectar_bd()
+    if not conn:
+        return "Lo siento, no pude conectar a la base de datos."
+
+    consulta_sql = generar_consulta_sql(input_usuario)
+    if not consulta_sql:
+        conn.close()
+        return "Lo siento, no pude generar una consulta para tu solicitud."
+
+    filas, columnas = ejecutar_consulta_sql(consulta_sql, conn)
+    conn.close()
+
+    if filas is None or columnas is None:
+        return "Lo siento, ocurrió un error al ejecutar tu solicitud."
+
+    respuesta = formatear_respuesta(filas, columnas)
+    return respuesta
