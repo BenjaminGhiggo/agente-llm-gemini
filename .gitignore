@@ -1,3 +1,4 @@
 # carpetas a ignorar
+__pycache__/
 venv_api_gemini/
 .env
