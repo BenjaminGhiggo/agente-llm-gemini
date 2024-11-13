@@ -38,14 +38,41 @@ def conectar_bd():
         print(f"Error al conectar a la base de datos: {e}")
         return None
 
+# Determinar si la pregunta es cuantitativa o cualitativa usando Gemini
+def determinar_tipo_pregunta(pregunta):
+    prompt = f"""
+    Clasifica la siguiente pregunta como "cuantitativa" si busca una respuesta numérica o "cualitativa" si busca un análisis o descripción.
+
+    Pregunta: "{pregunta}"
+    Clasificación:
+    """
+    try:
+        model_name = "models/gemini-1.5-flash"  # Asegúrate de que este modelo esté disponible
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt)
+        clasificacion = response.text.strip().lower()
+        if "cuantitativa" in clasificacion:
+            return "cuantitativa"
+        elif "cualitativa" in clasificacion:
+            return "cualitativa"
+        else:
+            # Por defecto, tratar como cualitativa
+            return "cualitativa"
+    except Exception as e:
+        print("Error al determinar el tipo de pregunta con Gemini:", str(e))
+        # Por defecto, tratar como cualitativa
+        return "cualitativa"
+
 # Generar una consulta SQL usando Gemini
-def generar_consulta_sql(pregunta):
+def generar_consulta_sql(pregunta, tipo_pregunta):
     # Crear el prompt detallado
     prompt = f"""
     Eres un asistente que traduce preguntas en lenguaje natural a consultas SQL para una base de datos de comercio electrónico.
     La base de datos tiene una única tabla llamada 'mercado' con una columna llamada 'content'.
     Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'mercado' y la columna 'content'.
     No incluyas consultas que modifiquen la base de datos (como INSERT, UPDATE, DELETE).
+    
+    Además, si la pregunta es de tipo "{tipo_pregunta}", adapta la consulta en consecuencia.
 
     Pregunta del usuario: "{pregunta}"
     Consulta SQL:
@@ -129,14 +156,51 @@ def ejecutar_consulta_sql(consulta_sql, conn):
         print(f"Error al ejecutar la consulta SQL: {e}")
         return None, None
 
+# Realizar análisis cualitativo con Gemini
+def realizar_analisis(pregunta, datos):
+    # Concatenar los datos obtenidos en una sola cadena de texto
+    contenidos = "\n".join([fila[0] for fila in datos])
+
+    # Crear el prompt para Gemini
+    prompt = f"""
+    Eres un analista de datos experto. A continuación se muestra un conjunto de datos:
+
+    {contenidos}
+
+    Basándote en estos datos, responde a la siguiente pregunta en español:
+
+    "{pregunta}"
+
+    Proporciona una respuesta precisa y concisa de máximo 2 párrafos, basada en la información disponible.
+    """
+
+    try:
+        model_name = "models/gemini-1.5-flash"  # Asegúrate de que este modelo esté disponible
+        model = genai.GenerativeModel(model_name)
+
+        # Generar la respuesta del análisis
+        response = model.generate_content(prompt)
+        analisis = response.text.strip()
+
+        print(f"Análisis generado: {analisis}")
+        return analisis
+    except Exception as e:
+        print("Error al realizar el análisis con Gemini:", str(e))
+        return "No se pudo realizar el análisis solicitado."
+
 # Formatear los resultados para la respuesta al usuario
-def formatear_respuesta(filas, columnas):
+def formatear_respuesta(filas, columnas, tipo_pregunta, pregunta_original):
     if not filas:
         return "No se encontraron resultados para tu consulta."
 
-    # Si es una sola fila y una sola columna, devolver solo el valor
-    if len(filas) == 1 and len(columnas) == 1:
+    # Si es una pregunta cuantitativa y retorna un solo valor, devolver solo el valor
+    if len(filas) == 1 and len(columnas) == 1 and tipo_pregunta == "cuantitativa":
         return str(filas[0][0])
+
+    # Si es una pregunta cualitativa, realizar análisis
+    if tipo_pregunta == "cualitativa":
+        analisis = realizar_analisis(pregunta_original, filas)
+        return analisis
 
     # Crear una tabla simple en formato markdown para múltiples resultados
     tabla = "| " + " | ".join(columnas) + " |\n"
@@ -149,20 +213,28 @@ def formatear_respuesta(filas, columnas):
 
 # Función principal para manejar la consulta del usuario
 def consulta(input_usuario):
+    # Determinar el tipo de pregunta
+    tipo_pregunta = determinar_tipo_pregunta(input_usuario)
+    print(f"Tipo de pregunta: {tipo_pregunta}")
+
+    # Conectar a la base de datos
     conn = conectar_bd()
     if not conn:
         return "Lo siento, no pude conectar a la base de datos."
 
-    consulta_sql = generar_consulta_sql(input_usuario)
+    # Generar la consulta SQL
+    consulta_sql = generar_consulta_sql(input_usuario, tipo_pregunta)
     if not consulta_sql:
         conn.close()
         return "Lo siento, no pude generar una consulta para tu solicitud."
 
+    # Ejecutar la consulta SQL
     filas, columnas = ejecutar_consulta_sql(consulta_sql, conn)
     conn.close()
 
     if filas is None or columnas is None:
         return "Lo siento, ocurrió un error al ejecutar tu solicitud."
 
-    respuesta = formatear_respuesta(filas, columnas)
+    # Formatear la respuesta según el tipo de pregunta
+    respuesta = formatear_respuesta(filas, columnas, tipo_pregunta, input_usuario)
     return respuesta
