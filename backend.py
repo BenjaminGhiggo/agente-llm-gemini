@@ -41,11 +41,11 @@ def conectar_bd():
 # Determinar si la pregunta es cuantitativa o cualitativa usando Gemini
 def determinar_tipo_pregunta(pregunta):
     prompt = f"""
-    Clasifica la siguiente pregunta como "cuantitativa" si busca una respuesta numérica o "cualitativa" si busca un análisis o descripción.
+Clasifica la siguiente pregunta como "cuantitativa" si busca una respuesta numérica o "cualitativa" si busca un análisis o descripción.
 
-    Pregunta: "{pregunta}"
-    Clasificación:
-    """
+Pregunta: "{pregunta}"
+Clasificación:
+"""
     try:
         model_name = "models/gemini-1.5-flash"  # Asegúrate de que este modelo esté disponible
         model = genai.GenerativeModel(model_name)
@@ -65,18 +65,20 @@ def determinar_tipo_pregunta(pregunta):
 
 # Generar una consulta SQL usando Gemini
 def generar_consulta_sql(pregunta, tipo_pregunta):
-    # Crear el prompt detallado
+    # Crear el prompt detallado, asegurando que Gemini genere solo la consulta SQL sin comentarios
     prompt = f"""
-    Eres un asistente que traduce preguntas en lenguaje natural a consultas SQL para una base de datos de comercio electrónico.
-    La base de datos tiene una única tabla llamada 'mercado' con una columna llamada 'content'.
-    Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'mercado' y la columna 'content'.
-    No incluyas consultas que modifiquen la base de datos (como INSERT, UPDATE, DELETE).
-    
-    Además, si la pregunta es de tipo "{tipo_pregunta}", adapta la consulta en consecuencia.
+Eres un asistente que traduce preguntas en lenguaje natural a consultas SQL para una base de datos de comercio electrónico.
+La base de datos tiene una única tabla llamada 'mercado' con una columna llamada 'content'.
+Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'mercado' y la columna 'content'.
+No incluyas consultas que modifiquen la base de datos (como INSERT, UPDATE, DELETE).
 
-    Pregunta del usuario: "{pregunta}"
-    Consulta SQL:
-    """
+Además, si la pregunta es de tipo "{tipo_pregunta}", adapta la consulta en consecuencia.
+
+Por favor, genera únicamente la consulta SQL sin comentarios ni explicaciones adicionales.
+
+Pregunta del usuario: "{pregunta}"
+Consulta SQL:
+"""
 
     try:
         # Definir el modelo a utilizar
@@ -91,7 +93,7 @@ def generar_consulta_sql(pregunta, tipo_pregunta):
         # Obtener el texto de la respuesta
         consulta_sql = response.text.strip()
 
-        # Eliminar bloques de código Markdown si existen
+        # Eliminar bloques de código Markdown si existen (aunque ya hemos pedido que no los incluya)
         consulta_sql = re.sub(r'^```sql\s*', '', consulta_sql, flags=re.IGNORECASE)
         consulta_sql = re.sub(r'```\s*$', '', consulta_sql, flags=re.IGNORECASE)
 
@@ -103,20 +105,23 @@ def generar_consulta_sql(pregunta, tipo_pregunta):
 
 # Validar la consulta SQL generada
 def validar_consulta_sql(consulta_sql):
+    # Eliminar comentarios y espacios en blanco al inicio
+    consulta_sql_clean = re.sub(r'^(\s*--.*\n)*\s*', '', consulta_sql)
+
     # Verificar que la consulta comience con SELECT
-    if not re.match(r'^\s*SELECT\s', consulta_sql, re.IGNORECASE):
+    if not re.match(r'^SELECT\s', consulta_sql_clean, re.IGNORECASE):
         print("La consulta no es un SELECT.")
         return False
 
     # Verificar que solo se use la tabla permitida
-    tablas = re.findall(r'FROM\s+(\w+)', consulta_sql, re.IGNORECASE)
+    tablas = re.findall(r'FROM\s+(\w+)', consulta_sql_clean, re.IGNORECASE)
     for tabla in tablas:
         if tabla.lower() != TABLA_PERMITIDA:
             print(f"Tabla no permitida en la consulta: {tabla}")
             return False
 
     # Verificar que solo se usen las columnas permitidas
-    select_clause = re.findall(r'SELECT\s+(.*?)\s+FROM', consulta_sql, re.IGNORECASE)
+    select_clause = re.findall(r'SELECT\s+(.*?)\s+FROM', consulta_sql_clean, re.IGNORECASE)
     if select_clause:
         select_clause = select_clause[0]
         # Extraer todas las columnas permitidas presentes en el SELECT
@@ -158,21 +163,24 @@ def ejecutar_consulta_sql(consulta_sql, conn):
 
 # Realizar análisis cualitativo con Gemini
 def realizar_analisis(pregunta, datos):
+    if not datos:
+        return "No se encontró información suficiente para realizar el análisis solicitado."
+
     # Concatenar los datos obtenidos en una sola cadena de texto
     contenidos = "\n".join([fila[0] for fila in datos])
 
     # Crear el prompt para Gemini
     prompt = f"""
-    Eres un analista de datos experto. A continuación se muestra un conjunto de datos:
+Eres un analista de datos experto. A continuación se muestra un conjunto de datos:
 
-    {contenidos}
+{contenidos}
 
-    Basándote en estos datos, responde a la siguiente pregunta en español:
+Basándote en estos datos, responde a la siguiente pregunta en español:
 
-    "{pregunta}"
+"{pregunta}"
 
-    Proporciona una respuesta precisa y concisa de máximo 2 párrafos, basada en la información disponible.
-    """
+Proporciona una respuesta precisa y concisa de máximo 2 párrafos, basada en la información disponible.
+"""
 
     try:
         model_name = "models/gemini-1.5-flash"  # Asegúrate de que este modelo esté disponible
@@ -211,6 +219,18 @@ def formatear_respuesta(filas, columnas, tipo_pregunta, pregunta_original):
 
     return tabla
 
+# Función para obtener todos los contenidos de la tabla 'mercado'
+def obtener_todos_los_contenidos(conn):
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT content FROM mercado;")
+        resultados = cursor.fetchall()
+        cursor.close()
+        return resultados
+    except psycopg2.Error as e:
+        print(f"Error al obtener contenidos: {e}")
+        return []
+
 # Función principal para manejar la consulta del usuario
 def consulta(input_usuario):
     # Determinar el tipo de pregunta
@@ -225,16 +245,22 @@ def consulta(input_usuario):
     # Generar la consulta SQL
     consulta_sql = generar_consulta_sql(input_usuario, tipo_pregunta)
     if not consulta_sql:
+        # Fall back antes de cerrar la conexión
+        print("Generación de consulta SQL fallida. Realizando análisis cualitativo con toda la información.")
+        respuesta = realizar_analisis(input_usuario, obtener_todos_los_contenidos(conn))
         conn.close()
-        return "Lo siento, no pude generar una consulta para tu solicitud."
+        return respuesta
 
     # Ejecutar la consulta SQL
     filas, columnas = ejecutar_consulta_sql(consulta_sql, conn)
-    conn.close()
-
     if filas is None or columnas is None:
-        return "Lo siento, ocurrió un error al ejecutar tu solicitud."
+        # Fall back antes de cerrar la conexión
+        print("Ejecución de consulta SQL fallida. Realizando análisis cualitativo con toda la información.")
+        respuesta = realizar_analisis(input_usuario, obtener_todos_los_contenidos(conn))
+        conn.close()
+        return respuesta
 
     # Formatear la respuesta según el tipo de pregunta
     respuesta = formatear_respuesta(filas, columnas, tipo_pregunta, input_usuario)
+    conn.close()
     return respuesta
