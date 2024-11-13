@@ -1,4 +1,4 @@
-# backend_historial.py
+# backend_marketing.py
 
 import os
 import psycopg2
@@ -26,8 +26,8 @@ DB_CONFIG = {
 }
 
 # Definir esquema permitido
-TABLA_PERMITIDA = "order_history"  # Cambio de 'mercado' a 'order_history'
-COLUMNAS_PERMITIDAS = ["content"]  # Asegúrate de que 'content' es una columna válida en 'order_history'
+TABLA_PERMITIDA = "marketing"
+COLUMNAS_PERMITIDAS = ["content"]
 
 # Conectar a la base de datos PostgreSQL
 def conectar_bd():
@@ -68,8 +68,8 @@ def generar_consulta_sql(pregunta, tipo_pregunta):
     # Crear el prompt detallado, asegurando que Gemini genere solo la consulta SQL sin comentarios
     prompt = f"""
 Eres un asistente que traduce preguntas en lenguaje natural a consultas SQL para una base de datos de comercio electrónico.
-La base de datos tiene una única tabla llamada 'order_history' con una columna llamada 'content'.
-Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'order_history' y la columna 'content'.
+La base de datos tiene una única tabla llamada 'marketing' con una columna llamada 'content'.
+Solo debes generar consultas SELECT válidas y seguras sobre la tabla 'marketing' y la columna 'content'.
 No incluyas consultas que modifiquen la base de datos (como INSERT, UPDATE, DELETE).
 
 Además, si la pregunta es de tipo "{tipo_pregunta}", adapta la consulta en consecuencia.
@@ -79,7 +79,7 @@ Por favor, genera únicamente la consulta SQL sin comentarios ni explicaciones a
 Pregunta del usuario: "{pregunta}"
 Consulta SQL:
 """
-    
+
     try:
         # Definir el modelo a utilizar
         model_name = "models/gemini-1.5-flash"  # Asegúrate de que este modelo esté disponible
@@ -220,11 +220,11 @@ def formatear_respuesta(filas, columnas, tipo_pregunta, pregunta_original):
 
     return tabla
 
-# Función para obtener todos los contenidos de la tabla 'order_history'
+# Función para obtener todos los contenidos de la tabla 'marketing'
 def obtener_todos_los_contenidos(conn):
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT content FROM order_history;")  # Cambio de 'mercado' a 'order_history'
+        cursor.execute("SELECT content FROM marketing;")
         resultados = cursor.fetchall()
         cursor.close()
         return resultados
@@ -254,7 +254,7 @@ def consulta(input_usuario):
 
     # Ejecutar la consulta SQL
     filas, columnas = ejecutar_consulta_sql(consulta_sql, conn)
-    if filas is None or columnas is None:  # Corrección aquí
+    if filas is None or columnas is None:
         # Fall back antes de cerrar la conexión
         print("Ejecución de consulta SQL fallida. Realizando análisis cualitativo con toda la información.")
         respuesta = realizar_analisis(input_usuario, obtener_todos_los_contenidos(conn))
