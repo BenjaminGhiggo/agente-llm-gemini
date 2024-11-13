@@ -1,2 +1,3 @@
-
+# carpetas a ignorar
 venv_api_gemini/
+.env
